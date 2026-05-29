@@ -1,7 +1,7 @@
 let express = require('express');
 let path = require('path');
 let fs = require('fs');
-let MongoClient = require('mongodb').MongoClient;
+let { Pool } = require('pg');
 let bodyParser = require('body-parser');
 let app = express();
 
@@ -21,57 +21,85 @@ app.get('/profile-picture', function (req, res) {
 });
 
 // use when starting application locally
-let mongoUrlLocal = "mongodb://admin:password@localhost:27017";
+let pgConfigLocal = {
+  host: 'localhost',
+  port: 5432,
+  database: 'mydb',
+  user: 'admin',
+  password: 'secret'
+};
 
 // use when starting application as docker container
-let mongoUrlDocker = "mongodb://admin:password@mongodb";
+let pgConfigDocker = {
+  host: 'postgres-db',
+  port: 5432,
+  database: 'mydb',
+  user: 'admin',
+  password: 'secret'
+};
 
-// pass these options to mongo client connect request to avoid DeprecationWarning for current Server Discovery and Monitoring engine
-let mongoClientOptions = { useNewUrlParser: true, useUnifiedTopology: true };
-
-// "user-account" in demo with docker. "my-db" in demo with docker-compose
-let databaseName = "my-db";
+// Create connection pool
+let pool = new Pool(pgConfigLocal);
+//let pool=new Pool(pgConfigDocker);
+// Initialize database table
+pool.query(`
+  CREATE TABLE IF NOT EXISTS users (
+    userid INTEGER PRIMARY KEY,
+    name VARCHAR(255),
+    email VARCHAR(255),
+    interests VARCHAR(255)
+  )
+`, function(err) {
+  if (err) console.error('Error creating table:', err);
+  else console.log('Users table ready');
+});
 
 app.post('/update-profile', function (req, res) {
   let userObj = req.body;
+  userObj['userid'] = 1;
 
-  MongoClient.connect(mongoUrlLocal, mongoClientOptions, function (err, client) {
-    if (err) throw err;
+  // PostgreSQL upsert using INSERT ... ON CONFLICT
+  let query = `
+    INSERT INTO users (userid, name, email, interests)
+    VALUES ($1, $2, $3, $4)
+    ON CONFLICT (userid) 
+    DO UPDATE SET 
+      name = EXCLUDED.name,
+      email = EXCLUDED.email,
+      interests = EXCLUDED.interests
+  `;
+  
+  let values = [
+    userObj.userid,
+    userObj.name || null,
+    userObj.email || null,
+    userObj.interests || null
+  ];
 
-    let db = client.db(databaseName);
-    userObj['userid'] = 1;
-
-    let myquery = { userid: 1 };
-    let newvalues = { $set: userObj };
-
-    db.collection("users").updateOne(myquery, newvalues, {upsert: true}, function(err, res) {
-      if (err) throw err;
-      client.close();
-    });
-
+  pool.query(query, values, function(err, result) {
+    if (err) {
+      console.error('Error updating profile:', err);
+      res.status(500).send({ error: 'Database error' });
+      return;
+    }
+    // Send response
+    res.send(userObj);
   });
-  // Send response
-  res.send(userObj);
 });
 
 app.get('/get-profile', function (req, res) {
-  let response = {};
-  // Connect to the db
-  MongoClient.connect(mongoUrlLocal, mongoClientOptions, function (err, client) {
-    if (err) throw err;
+  let query = 'SELECT * FROM users WHERE userid = $1';
+  let values = [1];
 
-    let db = client.db(databaseName);
-
-    let myquery = { userid: 1 };
-
-    db.collection("users").findOne(myquery, function (err, result) {
-      if (err) throw err;
-      response = result;
-      client.close();
-
-      // Send response
-      res.send(response ? response : {});
-    });
+  pool.query(query, values, function (err, result) {
+    if (err) {
+      console.error('Error fetching profile:', err);
+      res.status(500).send({ error: 'Database error' });
+      return;
+    }
+    
+    // Send response (first row or empty object)
+    res.send(result.rows.length > 0 ? result.rows[0] : {});
   });
 });
 

@@ -1,7 +1,11 @@
 FROM node:13-alpine
 
-ENV MONGO_DB_USERNAME=admin \
-    MONGO_DB_PWD=password
+# Optional: Set PostgreSQL environment variables if your app reads them from process.env
+ENV PGUSER=admin \
+    PGPASSWORD=secret \
+    PGDATABASE=mydb \
+    PGHOST=postgres \
+    PGPORT=5432
 
 RUN mkdir -p /home/app
 
